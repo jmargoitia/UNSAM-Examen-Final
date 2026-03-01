@@ -1,46 +1,117 @@
-## Cargo libreria
+#-------------- PREPARACIÓN --------------
+# Cargamos librerías
 library(tidyverse)
+library(readr)
+library(ggplot2)
+library(ggcorrplot)
+library(tidymodels)
+library(patchwork)
+library(GDAtools)
+library(ggdendro)
 
-## Creo el objeto atlas_data donde importo la base Atlas de CAF
-atlas_data <- read_csv("data/m4_atlas_argentina.csv")
+# Importamos base Atlas de CAF
+atlas <- read_csv("data/m4_atlas_argentina.csv")
 
 
-## Exploración
+#-------------- EXPLORACION y LIMPIEZA --------------
+# Exploramos estructura de la base y comportamiento general de las variables
+atlas %>% 
+  glimpse() %>% 
+  summary()
 
-# Estructura de las columnas
+# Confirmamos que los data points son únicos (jurisdicción y año)
+# Sumamos hogares y población: se verifica que hay superposición de niveles de gobierno por desfasaje con Censo
+n_distinct(atlas$codigo_unico, na.rm = TRUE)
+n_distinct(atlas$codigo_pais, na.rm = TRUE)
+n_distinct(atlas$poblacion_anio, na.rm = TRUE)
 
-glimpse(atlas_data)
+atlas %>% 
+  select(nombre_nivel, nivel_gobierno, codigo_nivel) %>% 
+  table()
 
-# Estadísticos descriptivos
+# Descartamos jurisdicciones provinciales: nos quedamos con 2320 obs
+# Corroboramos el agregado de población y hogares se acerca al Censo 2022
+colnames(atlas)
+atlas <- atlas %>%
+  filter(codigo_nivel == 2) %>% 
+  select(1,5:6,9:11,13:31)
 
-summary(atlas_data)
+atlas %>% 
+  select(poblacion, hogares) %>% 
+  summarise(pob_tot = sum(poblacion, na.rm = TRUE),
+            hogares_tot = sum(hogares, na.rm = TRUE))
 
-# Verificación de NAs ordenadas de mayor a menor
+# Reestructuramos variables de interés
+colnames(atlas)
 
-tabla_nas <- atlas_data %>%
+atlas <- atlas %>% 
+  mutate(tiene_ods = factor(tiene_ods,
+                            levels = c(0,1),
+                            labels = c("No","Si")))
+
+atlas <- atlas %>% 
+  rename(id_codigo_unico = codigo_unico,
+         id_nombre_subnacional = nombre_subnacional,
+         id_gob_regional = gob_regional,
+         id_gob_local = gob_local,
+         cat_nombre_nivel = nombre_nivel,
+         cat_ods = tiene_ods,
+         num_hogares = hogares,
+         num_poblacion = poblacion,
+         edu_analfabetismo = analfabetismo,
+         ml_fin_secundaria = fin_secundaria_adultos,
+         ml_participacion_mujer = participacion_mujeres,
+         ml_participacion_hombre = participacion_hombres,
+         ml_desempleo = desempleo_adulto,
+         ml_desempleo_mujer = desempleo_adulto_mujer,
+         ml_desempleo_hombre = desempleo_adulto_hombre,
+         ml_empleo_publico = empleo_publico_categoria,
+         sb_agua = agua_mejorada,
+         sb_saneamiento = saneamiento_mejorado,
+         sb_electricidad = electricidad,
+         sb_recoleccion = recoleccion_residuos,
+         demo_urbano = urbano,
+         demo_indigena = etnia_indigena,
+         demo_afro = etnia_afro,
+         tic_computadora = tics_computadora,
+         tic_celular = tics_celular)
+
+atlas <- atlas %>% 
+  select(starts_with("id_"),
+         starts_with("cat_"),
+         starts_with("num_"),
+         starts_with("edu_"),
+         starts_with("ml_"),
+         starts_with("sb_"),
+         starts_with("demo_"),
+         starts_with("tic_"))
+
+# Verificamos NAs
+tabla_nas <- atlas %>%
   summarise(across(everything(), ~sum(is.na(.)))) %>%
   pivot_longer(everything(), names_to = "variable", values_to = "total_nas") %>%
-  mutate(porcentaje = (total_nas / nrow(atlas_data)) * 100) %>%
+  mutate(porcentaje = (total_nas / nrow(atlas)) * 100) %>%
   arrange(desc(total_nas))
 
-# Nivel de dispersión de los datos
 
+#-------------- PREPROCESAMIENTO --------------
+## Dispersión de los datos
+
+# Graficamos desvío estándar para mejor visualización de los datos (sin población ni hogares)
+# Tabulamos distribución de los desvíos para observar dónde hacer los cortes de las categorías
 tabla_dispersion <- atlas_data %>%
   summarise(across(where(is.numeric), ~sd(., na.rm = TRUE))) %>%
   pivot_longer(everything(), names_to = "variable", values_to = "desviacion_estandar") %>%
   arrange(desc(desviacion_estandar))
 
-# Grafico el desvío estándar para mejor visualización de los datos (sin población, hogares y año de referencia del dato de población)
-# Armo tabla de la distribución de los desvíos para observar dónde hacer los cortes de las categorías
-
-distribucion_desvios <- atlas_data %>%
+distribucion_desvios <- atlas %>%
   summarise(across(where(is.numeric), ~sd(., na.rm = TRUE))) %>%
   pivot_longer(everything(), names_to = "variable", values_to = "desviacion") %>%
-  filter(!variable %in% c("poblacion", "hogares", "poblacion_anio"))
+  filter(!variable %in% c("poblacion", "hogares"))
 
 summary(distribucion_desvios$desviacion)
 
-# Clasificación basada en los cuartiles de la base
+# Clasificamos en base a cuartiles de la base
 desvios_categorizados <- distribucion_desvios %>%
   mutate(categoria = case_when(
     desviacion >= 0.1963 ~ "Alta Heterogeneidad",
@@ -48,11 +119,9 @@ desvios_categorizados <- distribucion_desvios %>%
     TRUE                 ~ "Heterogeneidad Media"
   )) %>%
   arrange(desc(desviacion))
-
 print(desvios_categorizados)
 
-
-# Grafico la clasificación de variables 
+# Graficamos la clasificación de variables 
 plot_heterogeneidad <- ggplot(desvios_categorizados, aes(x = reorder(variable, desviacion), y = desviacion, fill = categoria)) +
   geom_col() +
   coord_flip() + # Para que los nombres de las variables se lean bien
@@ -71,28 +140,19 @@ plot_heterogeneidad <- ggplot(desvios_categorizados, aes(x = reorder(variable, d
   theme_minimal() +
   theme(legend.position = "bottom") 
 
-## Descripción 
-La base posee 2344 filas (municipios) y 31 columnas. 
-Del total de 32 variables existen 20 con valores faltantes (NAs). Sin embargo, esas faltantes siempre están por debajo del 4,56% (107 NAs). La variable con más faltantes es en la Tasa de Desempleo de Mujeres Adultas. La cantidad de faltantes resulta poco significativa.
-En cuanto a la dispersión de los datos, es esperable que sean las variables de población y de cantidad de hogares las que muestren mayor variabilidad. Para lograr una lectura más ordenada de los datos, quitamos las variables de población, hogar y año y categorizamos los desvíos por nivel de heterogeneidad: Alta (violeta), Baja (lila) y Media (salmón). La mayor heterogeneidad entre municipios se observa en los indicadores de planificación urbana: proporción de hogares con servicio de recolección de residuos sólidos, proporción de hogares con acceso a agua mejorada, proporción de población que reside en zonas urbanas, proporción de hogares con acceso a servicios de saneamiento mejorado. En esta categoría también está incluida la dispersión entre municipios que cuentan con información disponible para indicadores asociados a ODS, que muestra una heterogeneidad de 0,20 desvíos estándar. Sin embargo, al ser dicotómica se recomienda su exclusión en la etapa de clustering para evitar distorciones o su tratamiento de manera diferencial. La mayor homoneidad entre municipios se encuentra en las tasas de desempleo (el total de las personas adultas y el de las mujeres y varones por separado), en el indicador de alfabetismo y en la proporción de la población que se identifica como indígena.
-
 
 ## Correlaciones
 
-# Cargo la libreria
-install.packages("ggcorrplot")
-library(ggcorrplot)
-
-# Preparo los datos sacando las variables sin variabilidad
+# Preparamos variables numéricas
 datos_para_corr <- atlas_data %>%
   select(where(is.numeric)) %>%
-  select(-poblacion, -hogares, -poblacion_anio, -codigo_nivel, -tiene_ods) %>% 
+  select(-num_poblacion, -num_hogares, -cat_ods) %>% 
   drop_na() 
 
-# Calculo la matriz nuevamente
+# Calculamos la matriz nuevamente
 matriz_correlacion <- cor(datos_para_corr)
 
-# Grafico la matriz
+# Graficamos la matriz
 plot_correlacion <- ggcorrplot(matriz_correlacion, 
                                hc.order = TRUE,   
                                type = "lower",    
