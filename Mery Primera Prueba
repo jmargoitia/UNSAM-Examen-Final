@@ -1,28 +1,99 @@
-## Cargo libreria
+#-------------- PREPARACIÓN --------------
+## Cargamos libreria
 library(tidyverse)
+library(readr)
+library(ggplot2)
+library(ggcorrplot)
 
-## Creo el objeto atlas_data donde importo la base Atlas de CAF
+# Importamos base Atlas de CAF
 atlas_data <- read_csv("data/m4_atlas_argentina.csv")
 
 
-## Exploración
+#-------------- EXPLORACION y LIMPIEZA --------------
 
-# Estructura de las columnas
+# Exploramos estructura de la base y comportamiento general de las variables
+atlas %>% 
+  glimpse() %>% 
+  summary()
 
-glimpse(atlas_data)
+# Confirmamos que los data points son únicos (jurisdicción y año)
+# Sumamos hogares y población: se verifica que hay superposición de niveles de gobierno por desfasaje con Censo
+n_distinct(atlas$codigo_unico, na.rm = TRUE)
+n_distinct(atlas$codigo_pais, na.rm = TRUE)
+n_distinct(atlas$poblacion_anio, na.rm = TRUE)
 
-# Estadísticos descriptivos
+atlas %>% 
+  select(nombre_nivel, nivel_gobierno, codigo_nivel) %>% 
+  table()
 
-summary(atlas_data)
+# Descartamos jurisdicciones provinciales: nos quedamos con 2320 obs
+# Corroboramos el agregado de población y hogares se acerca al Censo 2022
+colnames(atlas)
+atlas <- atlas %>%
+  filter(codigo_nivel == 2) %>% 
+  select(1,5:6,9:11,13:31)
 
-# Verificación de NAs ordenadas de mayor a menor
+atlas %>% 
+  select(poblacion, hogares) %>% 
+  summarise(pob_tot = sum(poblacion, na.rm = TRUE),
+            hogares_tot = sum(hogares, na.rm = TRUE))
 
-tabla_nas <- atlas_data %>%
+# Reestructuramos variables de interés
+colnames(atlas)
+
+atlas <- atlas %>% 
+  mutate(tiene_ods = factor(tiene_ods,
+                            levels = c(0,1),
+                            labels = c("No","Si")))
+
+atlas <- atlas %>% 
+  rename(id_codigo_unico = codigo_unico,
+         id_nombre_subnacional = nombre_subnacional,
+         id_gob_regional = gob_regional,
+         id_gob_local = gob_local,
+         cat_nombre_nivel = nombre_nivel,
+         cat_ods = tiene_ods,
+         num_hogares = hogares,
+         num_poblacion = poblacion,
+         edu_analfabetismo = analfabetismo,
+         ml_fin_secundaria = fin_secundaria_adultos,
+         ml_participacion_mujer = participacion_mujeres,
+         ml_participacion_hombre = participacion_hombres,
+         ml_desempleo = desempleo_adulto,
+         ml_desempleo_mujer = desempleo_adulto_mujer,
+         ml_desempleo_hombre = desempleo_adulto_hombre,
+         ml_empleo_publico = empleo_publico_categoria,
+         sb_agua = agua_mejorada,
+         sb_saneamiento = saneamiento_mejorado,
+         sb_electricidad = electricidad,
+         sb_recoleccion = recoleccion_residuos,
+         demo_urbano = urbano,
+         demo_indigena = etnia_indigena,
+         demo_afro = etnia_afro,
+         tic_computadora = tics_computadora,
+         tic_celular = tics_celular)
+
+atlas <- atlas %>% 
+  select(starts_with("id_"),
+         starts_with("cat_"),
+         starts_with("num_"),
+         starts_with("edu_"),
+         starts_with("ml_"),
+         starts_with("sb_"),
+         starts_with("demo_"),
+         starts_with("tic_"))
+
+# Verificamos NAs
+colSums(is.na(atlas))
+
+tabla_nas <- atlas %>%
   summarise(across(everything(), ~sum(is.na(.)))) %>%
   pivot_longer(everything(), names_to = "variable", values_to = "total_nas") %>%
-  mutate(porcentaje = (total_nas / nrow(atlas_data)) * 100) %>%
+  mutate(porcentaje = (total_nas / nrow(atlas)) * 100) %>%
   arrange(desc(total_nas))
 
+
+#-------------- PREPROCESAMIENTO --------------
 # Nivel de dispersión de los datos
 
 tabla_dispersion <- atlas_data %>%
