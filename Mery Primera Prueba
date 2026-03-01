@@ -203,3 +203,16 @@ ggcorrplot(matriz_correlacion,
            ggtheme = theme_minimal()) +
   theme(axis.text.x = element_text(size = 8, angle = 90),
         axis.text.y = element_text(size = 8))
+
+
+
+#-------------- PCA --------------
+
+
+
+
+
+#-------------- CLUSTERING --------------
+
+
+
