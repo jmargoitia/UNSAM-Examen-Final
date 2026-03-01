@@ -62,6 +62,7 @@ atlas <- atlas %>%
     # Numéricas base
     num_hogares = hogares,
     num_poblacion = poblacion,
+    # Educación
     edu_analfabetismo = analfabetismo,
     edu_fin_secundaria = fin_secundaria_adultos,
     # Mercado laboral
