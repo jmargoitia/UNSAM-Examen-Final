@@ -3,6 +3,7 @@
 library(tidyverse)
 library(readr)
 library(ggplot2)
+library(corrplot)
 library(ggcorrplot)
 library(tidymodels)
 library(patchwork)
@@ -11,6 +12,7 @@ library(ggdendro)
 
 # Importamos base Atlas de CAF
 atlas <- read_csv("data/m4_atlas_argentina.csv")
+
 
 
 #-------------- EXPLORACION y LIMPIEZA --------------
@@ -41,7 +43,8 @@ atlas %>%
   summarise(pob_tot = sum(poblacion, na.rm = TRUE),
             hogares_tot = sum(hogares, na.rm = TRUE))
 
-# Reestructuramos variables de interés
+## Reestructuramos variables de interés----
+# Factorizamos variable dummy (ODS), invertimos variables negativas, categorizamos y ordenamos
 colnames(atlas)
 
 atlas <- atlas %>% 
@@ -49,7 +52,9 @@ atlas <- atlas %>%
                             levels = c(0,1),
                             labels = c("No","Si")))
 
-atlas <- atlas %>% 
+atlas <- atlas %>%
+  mutate(alfabetismo = 1-analfabetismo) %>%
+  select(-analfabetismo) %>% 
   rename(
     # Identificadores
     id_codigo_unico = codigo_unico,
@@ -63,7 +68,7 @@ atlas <- atlas %>%
     num_hogares = hogares,
     num_poblacion = poblacion,
     # Educación
-    edu_analfabetismo = analfabetismo,
+    edu_alfabetismo = alfabetismo,
     edu_fin_secundaria = fin_secundaria_adultos,
     # Mercado laboral
     ml_participacion_mujer = participacion_mujeres,
@@ -95,20 +100,46 @@ atlas <- atlas %>%
          starts_with("demo_"),
          starts_with("tic_"))
 
-# Verificamos NAs
-tabla_nas <- atlas %>%
+## Verificamos NAs (por variables y por municipio)----
+
+tabla_nas_vars <- atlas %>%
   summarise(across(everything(), ~sum(is.na(.)))) %>%
   pivot_longer(everything(), names_to = "variable", values_to = "total_nas") %>%
   mutate(porcentaje = (total_nas / nrow(atlas)) * 100) %>%
   arrange(desc(total_nas))
 
+tabla_nas_munis <- atlas %>%
+  mutate(total_nas = rowSums(is.na(select(., starts_with("edu_"),
+                                          starts_with("ml_"),
+                                          starts_with("sb_"),
+                                          starts_with("demo_"),
+                                          starts_with("tic_"))))) %>%
+  count(total_nas, name = "munis") %>%
+  mutate(porcentaje = (munis / nrow(atlas)) * 100) %>%
+  arrange(desc(total_nas))
+
+atlas <- atlas %>%
+  mutate(total_nas = rowSums(is.na(select(., starts_with("edu_"),
+                                          starts_with("ml_"),
+                                          starts_with("sb_"),
+                                          starts_with("demo_"),
+                                          starts_with("tic_"))))) %>%
+  filter(total_nas<16) %>% 
+  select(-total_nas)
+
+atlas <- atlas %>%
+  mutate(across(9:25, ~ifelse(is.na(.), median(., na.rm = TRUE), .)))
+
+colSums(is.na(atlas))
+
+
 
 #-------------- PREPROCESAMIENTO --------------
-## Dispersión de los datos
+## Dispersión de los datos----
 
-# Graficamos desvío estándar para mejor visualización de los datos (sin población ni hogares)
+# Graficamos desvío estándar para mejor visualización de los datos (sin población y hogares)
 # Tabulamos distribución de los desvíos para observar dónde hacer los cortes de las categorías
-tabla_dispersion <- atlas_data %>%
+tabla_dispersion <- atlas %>%
   summarise(across(where(is.numeric), ~sd(., na.rm = TRUE))) %>%
   pivot_longer(everything(), names_to = "variable", values_to = "desviacion_estandar") %>%
   arrange(desc(desviacion_estandar))
@@ -116,59 +147,59 @@ tabla_dispersion <- atlas_data %>%
 distribucion_desvios <- atlas %>%
   summarise(across(where(is.numeric), ~sd(., na.rm = TRUE))) %>%
   pivot_longer(everything(), names_to = "variable", values_to = "desviacion") %>%
-  filter(!variable %in% c("poblacion", "hogares"))
+  filter(!variable %in% c("num_poblacion", "num_hogares"))
 
 summary(distribucion_desvios$desviacion)
 
-# Clasificamos en base a cuartiles de la base
+# Clasificación basada en los cuartiles de la base
 desvios_categorizados <- distribucion_desvios %>%
   mutate(categoria = case_when(
-    desviacion >= 0.1963 ~ "Alta Heterogeneidad",
-    desviacion <= 0.0649 ~ "Baja Heterogeneidad",
-    TRUE                 ~ "Heterogeneidad Media"
-  )) %>%
+    desviacion >= 0.1963 ~ "Alta",
+    desviacion <= 0.0649 ~ "Baja",
+    TRUE                 ~ "Media"), 
+    categoria = factor(categoria, levels = c("Alta", "Media", "Baja"))) %>%
   arrange(desc(desviacion))
+
 print(desvios_categorizados)
 
 # Graficamos la clasificación de variables 
-plot_heterogeneidad <- ggplot(desvios_categorizados, aes(x = reorder(variable, desviacion), y = desviacion, fill = categoria)) +
+ggplot(desvios_categorizados, aes(x = reorder(variable, desviacion), y = desviacion, fill = categoria)) +
   geom_col() +
   coord_flip() + # Para que los nombres de las variables se lean bien
   scale_fill_manual(values = c(
-    "Alta Heterogeneidad" = "#51127c",
-    "Heterogeneidad Media" = "#b63679",
-    "Baja Heterogeneidad" = "#fb8861"
+    "Alta" = "#51127c",
+    "Media" = "#b63679",
+    "Baja" = "#fb8861"
   )) +
   labs(
-    title = "Brechas Territoriales en Municipios Argentinos",
-    subtitle = "Clasificación de indicadores según su desviación estándar (N=2344)",
-    x = "Indicador Social",
-    y = "Desviación Estándar",
-    fill = "Nivel de Heterogeneidad"
+    title = "Brechas territoriales en localidades argentinas",
+    subtitle = "Clasificación de indicadores según su desviación estándar (N=2217)", #2320?
+    x = "Indicador de bienestarl",
+    y = "Desviación estándar",
+    fill = "Nivel de heterogeneidad"
   ) +
   theme_minimal() +
   theme(legend.position = "bottom") 
 
 
-## Correlaciones
+## Matriz de correlación----
 
-# Preparamos variables numéricas
-datos_para_corr <- atlas_data %>%
+# Seleccionamos variables de bienestar
+corr <- atlas %>%
   select(where(is.numeric)) %>%
-  select(-num_poblacion, -num_hogares, -cat_ods) %>% 
-  drop_na() 
+  select(-num_poblacion, -num_hogares)
 
-# Calculamos la matriz nuevamente
-matriz_correlacion <- cor(datos_para_corr)
+# Calculamos la matriz
+matriz_correlacion <- cor(corr)
 
 # Graficamos la matriz
-plot_correlacion <- ggcorrplot(matriz_correlacion, 
-                               hc.order = TRUE,   
-                               type = "lower",    
-                               lab = TRUE,        
-                               lab_size = 2.5,      
-                               colors = c("#51127c", "white", "#fb8861"), 
-                               title = "Matriz de Correlación: Indicadores de Bienestar",
-                               ggtheme = theme_minimal()) +
+ggcorrplot(matriz_correlacion,
+           hc.order = TRUE,
+           type = "lower",
+           lab = TRUE,        
+           lab_size = 2.5,      
+           colors = c("#51127c", "white", "#fb8861"), 
+           title = "Matriz de Correlación: indicadores locales de bienestar",
+           ggtheme = theme_minimal()) +
   theme(axis.text.x = element_text(size = 8, angle = 90),
         axis.text.y = element_text(size = 8))
