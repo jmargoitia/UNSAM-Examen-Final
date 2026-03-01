@@ -50,31 +50,39 @@ atlas <- atlas %>%
                             labels = c("No","Si")))
 
 atlas <- atlas %>% 
-  rename(id_codigo_unico = codigo_unico,
-         id_nombre_subnacional = nombre_subnacional,
-         id_gob_regional = gob_regional,
-         id_gob_local = gob_local,
-         cat_nombre_nivel = nombre_nivel,
-         cat_ods = tiene_ods,
-         num_hogares = hogares,
-         num_poblacion = poblacion,
-         edu_analfabetismo = analfabetismo,
-         ml_fin_secundaria = fin_secundaria_adultos,
-         ml_participacion_mujer = participacion_mujeres,
-         ml_participacion_hombre = participacion_hombres,
-         ml_desempleo = desempleo_adulto,
-         ml_desempleo_mujer = desempleo_adulto_mujer,
-         ml_desempleo_hombre = desempleo_adulto_hombre,
-         ml_empleo_publico = empleo_publico_categoria,
-         sb_agua = agua_mejorada,
-         sb_saneamiento = saneamiento_mejorado,
-         sb_electricidad = electricidad,
-         sb_recoleccion = recoleccion_residuos,
-         demo_urbano = urbano,
-         demo_indigena = etnia_indigena,
-         demo_afro = etnia_afro,
-         tic_computadora = tics_computadora,
-         tic_celular = tics_celular)
+  rename(
+    # Identificadores
+    id_codigo_unico = codigo_unico,
+    id_nombre_subnacional = nombre_subnacional,
+    id_gob_regional = gob_regional,
+    id_gob_local = gob_local,
+    # Categóricas
+    cat_nombre_nivel = nombre_nivel,
+    cat_ods = tiene_ods,
+    # Numéricas base
+    num_hogares = hogares,
+    num_poblacion = poblacion,
+    edu_analfabetismo = analfabetismo,
+    edu_fin_secundaria = fin_secundaria_adultos,
+    # Mercado laboral
+    ml_participacion_mujer = participacion_mujeres,
+    ml_participacion_hombre = participacion_hombres,
+    ml_desempleo = desempleo_adulto,
+    ml_desempleo_mujer = desempleo_adulto_mujer,
+    ml_desempleo_hombre = desempleo_adulto_hombre,
+    ml_empleo_publico = empleo_publico_categoria,
+    # Servicios básicos
+    sb_agua = agua_mejorada,
+    sb_saneamiento = saneamiento_mejorado,
+    sb_electricidad = electricidad,
+    sb_recoleccion = recoleccion_residuos,
+    # Demográficas
+    demo_urbano = urbano,
+    demo_indigena = etnia_indigena,
+    demo_afro = etnia_afro,
+    # Tecnologías de la información y la comunicación
+    tic_computadora = tics_computadora,
+    tic_celular = tics_celular)
 
 atlas <- atlas %>% 
   select(starts_with("id_"),
