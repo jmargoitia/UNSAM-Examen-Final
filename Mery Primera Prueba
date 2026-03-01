@@ -208,6 +208,86 @@ ggcorrplot(matriz_correlacion,
 
 #-------------- PCA --------------
 
+## Estructura emergente de diferenciación----
+
+# Construimos la receta con total de predictores y calculamos resultados
+
+pca_recipe <- corr %>% 
+  recipe(~.) %>%
+  step_normalize(all_numeric()) %>%
+  step_pca(all_numeric(), num_comp=17)
+
+pca_recipe
+
+pca_estimates <-  prep(pca_recipe)
+
+# Evaluamos varianza para seleccionar k componentes sobre las cuales clusterizar
+tidy(pca_estimates, 2, type="variance") %>%
+  filter(terms=="percent variance") %>%
+  mutate(component= factor(paste0("PC", component),
+                           levels=paste0("PC", 1:17))) %>%
+  ggplot(aes(x=component,y=value,group=terms)) +
+  geom_col() +
+  geom_text(aes(label = round(value, 2)), vjust = -0.3, size = 2.5) +
+  scale_y_continuous(limits = c(0, 105), breaks = seq(0, 100, by = 20)) +
+  labs(title="% varianza",
+       x="Componente",
+       y="Valor") + 
+  theme_minimal() +
+  
+  tidy(pca_estimates, 2, type="variance") %>%
+  filter(terms=="cumulative percent variance") %>%
+  mutate(component= factor(paste0("PC", component),
+                           levels=paste0("PC", 1:17))) %>%
+  ggplot(aes(x=component,y=value,group=terms)) +
+  geom_col() +
+  geom_text(aes(label = round(value, 2)), vjust = -0.3, size = 2.5) +
+  scale_y_continuous(limits = c(0, 105), breaks = seq(0, 100, by = 20)) +
+  labs(title="% varianza acum.",
+       x="Componente",
+       y="Valor") + 
+  theme_minimal()
+
+# Evaluamos cargas factoriales 
+# Retenemos 5 componentes principales que explican casi tres cuartos (73.3%) de la varianza acumulada
+# - Es un rango de componentes con claridad conceptual y relevancia analítica de brechas territoriales
+# - Trade off: sumar PC6 y PC7 permite superar el 80% de varianza acumulada, pero hay superposición interpretativa con PC3 y PC4
+
+#que explican más de 3/4 (78.1%) de la varianza acumulada y ofrecen relevancia analítica
+# Probamos incluir PC7, pero la ganancia estadística es marginal y suma complejidad interpretativa
+
+tidy(pca_estimates, 2, type="coef") %>%
+  filter(component %in% paste0("PC", 1:7)) %>%
+  mutate(component = factor(component, 
+                            levels = paste0("PC", 1:7)),
+         direccion = ifelse(value>0, "Negativa", "Positiva")) %>% 
+  ggplot(aes(value, terms, fill=direccion)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label=round(value,2))) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_fill_manual(values = c("Negativa" = "#51127c", "Positiva" = "#fb8861")) +
+  labs(title="Cargas factoriales (comp. 1-6)",
+       x="Carga",
+       y="Variable") + 
+  facet_wrap(~component, nrow=1) +
+  theme_minimal()
+
+
+# Estimamos nuevamente el PCA ahora con 5 componentes principales (insumo para el clustering)
+# Sumamos nuevo objeto con identificadores municipales para potenciales interpretaciones
+
+pca_recipe_final <- corr %>% 
+  recipe(~.) %>%
+  step_normalize(all_numeric()) %>%
+  step_pca(all_numeric(), num_comp=5)
+
+pca_estimates_final <-  prep(pca_recipe_final)
+
+pca_data <- bake(pca_estimates_final, new_data = NULL)
+
+pca_data_id <- bind_cols(atlas %>%
+                        select(starts_with("id_")),
+                      pca_data)
 
 
 
