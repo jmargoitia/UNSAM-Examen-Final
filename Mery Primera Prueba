@@ -215,7 +215,8 @@ ggcorrplot(matriz_correlacion,
 
 # Construimos la receta con total de predictores y calculamos resultados
 
-pca_recipe <- corr %>% 
+pca_recipe <- atlas %>% 
+  select(edu_fin_secundaria:tic_celular) %>% 
   recipe(~.) %>%
   step_normalize(all_numeric()) %>%
   step_pca(all_numeric(), num_comp=17)
@@ -270,7 +271,7 @@ tidy(pca_estimates, 2, type="coef") %>%
   geom_vline(xintercept = 0, linetype = "dashed") +
   scale_fill_manual(values = c("Negativa" = "#51127c", "Positiva" = "#fb8861")) +
   xlim(-1.1, 1.1) +
-  labs(title="Cargas factoriales (comp. 1-6)",
+  labs(title="Cargas factoriales (comp. 1-5)",
        x="Carga",
        y="Variable") + 
   facet_wrap(~component, nrow=1) +
@@ -280,7 +281,8 @@ tidy(pca_estimates, 2, type="coef") %>%
 # Estimamos nuevamente el PCA ahora con dimensionalidad reducida a 5 componentes principales
 # Sumamos nuevo objeto con identificadores municipales para potenciales interpretaciones
 
-pca_recipe_final <- corr %>% 
+pca_recipe_final <- atlas %>% 
+  select(edu_fin_secundaria:tic_celular) %>% 
   recipe(~.) %>%
   step_normalize(all_numeric()) %>%
   step_pca(all_numeric(), num_comp=5)
@@ -289,9 +291,6 @@ pca_estimates_final <-  prep(pca_recipe_final)
 
 pca_data <- bake(pca_estimates_final, new_data = NULL)
 
-pca_data_id <- bind_cols(atlas %>%
-                        select(starts_with("id_")),
-                      pca_data)
 
 
 
@@ -330,13 +329,14 @@ for (i in centers) {
   # augment: asignaciones de clusters
   assignments <- assignments %>%
     bind_rows(
-      augment(km, pca_data_id) %>%
+      augment(km, atlas) %>%
         mutate(k = i) %>%
         select(k, everything()))
 }
 
 clusterings
 assignments
+
 
 # Graficamos el método del codo
 # Razonable optar por k =  4 o k = 5 (no es nítido el punto donde se aplana la caída de variabilidad)
@@ -351,9 +351,11 @@ ggplot(clusterings, aes(x=as.factor(k), y=tot.withinss, group=1)) +
 # Por sugerencia de la IA Claude, calculamos la reducción porcentual de WCV con cada k
 # Confirmamos que a partir de k = 4 se aplana la curva (las reducciones empiezan a moderarse)
 # De todas formas hacemos pruebas con k = 5 (equivalente a la cantidad de componentes principales)
-tabla_reduccion_WCV <- clusterings %>%
+clusterings <- clusterings %>%
   arrange(k) %>%
-  mutate(reduccion = (lag(tot.withinss) - tot.withinss) / lag(tot.withinss) * 100)
+  mutate(reduccion_WCV = (lag(tot.withinss) - tot.withinss) / lag(tot.withinss) * 100,
+         aumento_BCV = (betweenss - lag(betweenss)) / totss * 100)
+clusterings
 
 ggplot(clusterings, aes(x=as.factor(k), y=tot.withinss, group=1)) +
   geom_line() +
