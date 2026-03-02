@@ -1,4 +1,5 @@
 #-------------- PREPARACIÓN --------------
+
 # Cargamos librerías
 library(tidyverse)
 library(readr)
@@ -16,6 +17,7 @@ atlas <- read_csv("data/m4_atlas_argentina.csv")
 
 
 #-------------- EXPLORACION y LIMPIEZA --------------
+
 # Exploramos estructura de la base y comportamiento general de las variables
 atlas %>% 
   glimpse() %>% 
@@ -100,7 +102,7 @@ atlas <- atlas %>%
          starts_with("demo_"),
          starts_with("tic_"))
 
-## Verificamos NAs (por variables y por municipio)----
+## Exploramos y tratamos NAs (por variables y por municipio)----
 
 tabla_nas_vars <- atlas %>%
   summarise(across(everything(), ~sum(is.na(.)))) %>%
@@ -135,6 +137,7 @@ colSums(is.na(atlas))
 
 
 #-------------- PREPROCESAMIENTO --------------
+
 ## Dispersión de los datos----
 
 # Graficamos desvío estándar para mejor visualización de los datos (sin población y hogares)
@@ -208,7 +211,7 @@ ggcorrplot(matriz_correlacion,
 
 #-------------- PCA --------------
 
-## Estructura emergente de diferenciación----
+## Estructura latente para diferenciación----
 
 # Construimos la receta con total de predictores y calculamos resultados
 
@@ -221,7 +224,7 @@ pca_recipe
 
 pca_estimates <-  prep(pca_recipe)
 
-# Evaluamos varianza para seleccionar k componentes sobre las cuales clusterizar
+# Evaluamos varianza para seleccionar componentes sobre las cuales clusterizar
 tidy(pca_estimates, 2, type="variance") %>%
   filter(terms=="percent variance") %>%
   mutate(component= factor(paste0("PC", component),
@@ -248,7 +251,7 @@ tidy(pca_estimates, 2, type="variance") %>%
        y="Valor") + 
   theme_minimal()
 
-# Evaluamos cargas factoriales 
+## Evaluamos cargas factoriales---- 
 # Retenemos 5 componentes principales que explican casi tres cuartos (73.3%) de la varianza acumulada
 # - Es un rango de componentes con claridad conceptual y relevancia analítica de brechas territoriales
 # - Trade off: sumar PC6 y PC7 permite superar el 80% de varianza acumulada, pero hay superposición interpretativa con PC3 y PC4
@@ -257,23 +260,24 @@ tidy(pca_estimates, 2, type="variance") %>%
 # Probamos incluir PC7, pero la ganancia estadística es marginal y suma complejidad interpretativa
 
 tidy(pca_estimates, 2, type="coef") %>%
-  filter(component %in% paste0("PC", 1:7)) %>%
+  filter(component %in% paste0("PC", 1:5)) %>%
   mutate(component = factor(component, 
-                            levels = paste0("PC", 1:7)),
+                            levels = paste0("PC", 1:5)),
          direccion = ifelse(value>0, "Negativa", "Positiva")) %>% 
   ggplot(aes(value, terms, fill=direccion)) +
   geom_col(show.legend = FALSE) +
   geom_text(aes(label=round(value,2))) +
   geom_vline(xintercept = 0, linetype = "dashed") +
   scale_fill_manual(values = c("Negativa" = "#51127c", "Positiva" = "#fb8861")) +
+  xlim(-1.1, 1.1) +
   labs(title="Cargas factoriales (comp. 1-6)",
        x="Carga",
        y="Variable") + 
   facet_wrap(~component, nrow=1) +
   theme_minimal()
 
-
-# Estimamos nuevamente el PCA ahora con 5 componentes principales (insumo para el clustering)
+## Insumo para el clustering----
+# Estimamos nuevamente el PCA ahora con dimensionalidad reducida a 5 componentes principales
 # Sumamos nuevo objeto con identificadores municipales para potenciales interpretaciones
 
 pca_recipe_final <- corr %>% 
@@ -291,8 +295,78 @@ pca_data_id <- bind_cols(atlas %>%
 
 
 
-
 #-------------- CLUSTERING --------------
+
+## K-means----
+# Método del codo
+
+# Fijamos semilla para reproducibilidad
+set.seed(123)
+
+# Generamos vector de clusters a explorar
+centers <- 1:10
+
+# Inicializamos tibbles vacías para llenar con asignaciones de clusters y métricas de calidad
+assignments <- tibble()
+clusterings <- tibble()
+
+# Iteramos sobre cada valor de k
+# Parámetro nstart = 15 para evitar sesgo de única inicialización aleatoria de centroides
+for (i in centers) {
+  
+  km <- pca_recipe_final %>%
+    prep() %>%
+    bake(new_data = NULL) %>%
+    select(starts_with("PC")) %>%
+    kmeans(x = ., centers = i, nstart = 25)
+  
+  # glance: extraemos métricas de variabilidad intra/extracluster
+  clusterings <- clusterings %>%
+    bind_rows(
+      glance(km) %>%
+        mutate(k = i) %>%
+        select(k, everything()))
+  
+  # augment: asignaciones de clusters
+  assignments <- assignments %>%
+    bind_rows(
+      augment(km, pca_data_id) %>%
+        mutate(k = i) %>%
+        select(k, everything()))
+}
+
+clusterings
+assignments
+
+# Graficamos el método del codo
+# Razonable optar por k =  4 o k = 5 (no es nítido el punto donde se aplana la caída de variabilidad)
+ggplot(clusterings, aes(x=as.factor(k), y=tot.withinss, group=1)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Método del codo: K-means",
+       x="Cantidad clústers (k)",
+       y="Variabilidad intra-cluster (WCV)") +
+  theme_minimal()
+
+# Por sugerencia de la IA Claude, calculamos la reducción porcentual de WCV con cada k
+# Confirmamos que a partir de k = 4 se aplana la curva (las reducciones empiezan a moderarse)
+# De todas formas hacemos pruebas con k = 5 (equivalente a la cantidad de componentes principales)
+tabla_reduccion_WCV <- clusterings %>%
+  arrange(k) %>%
+  mutate(reduccion = (lag(tot.withinss) - tot.withinss) / lag(tot.withinss) * 100)
+
+ggplot(clusterings, aes(x=as.factor(k), y=tot.withinss, group=1)) +
+  geom_line() +
+  geom_point() +
+  geom_vline(xintercept = 4, linetype="dashed") +
+  labs(title = "Método del codo: K-means",
+       x="Cantidad clústers (k)",
+       y="Variabilidad intra-cluster (WCV)") +
+  theme_minimal()
+
+
+
+## Hierarchical Clustering----
 
 
 
