@@ -155,7 +155,7 @@ distribucion_desvios <- atlas %>%
 summary(distribucion_desvios$desviacion)
 
 # Clasificación basada en los cuartiles de la base
-desvios_categorizados <- distribucion_desvios %>%
+desvios_categorizados <- desvios_distribucion %>%
   mutate(categoria = case_when(
     desviacion >= 0.1963 ~ "Alta",
     desviacion <= 0.0649 ~ "Baja",
@@ -257,9 +257,6 @@ tidy(pca_estimates, 2, type="variance") %>%
 # - Es un rango de componentes con claridad conceptual y relevancia analítica de brechas territoriales
 # - Trade off: sumar PC6 y PC7 permite superar el 80% de varianza acumulada, pero hay superposición interpretativa con PC3 y PC4
 
-#que explican más de 3/4 (78.1%) de la varianza acumulada y ofrecen relevancia analítica
-# Probamos incluir PC7, pero la ganancia estadística es marginal y suma complejidad interpretativa
-
 tidy(pca_estimates, 2, type="coef") %>%
   filter(component %in% paste0("PC", 1:5)) %>%
   mutate(component = factor(component, 
@@ -287,18 +284,16 @@ pca_recipe_final <- atlas %>%
   step_normalize(all_numeric()) %>%
   step_pca(all_numeric(), num_comp=5)
 
-pca_estimates_final <-  prep(pca_recipe_final)
-
-pca_data <- bake(pca_estimates_final, new_data = NULL)
-
+pca_estimates_final <-  prep(pca_recipe_final) #input K-means
+pca_data <- bake(pca_estimates_final, new_data = NULL) # input HC
 
 
 
 #-------------- CLUSTERING --------------
 
 ## K-means----
-# Método del codo
 
+# Método del codo
 # Fijamos semilla para reproducibilidad
 set.seed(123)
 
@@ -306,11 +301,11 @@ set.seed(123)
 centers <- 1:10
 
 # Inicializamos tibbles vacías para llenar con asignaciones de clusters y métricas de calidad
-assignments <- tibble()
-clusterings <- tibble()
+km_assignments <- tibble()
+km_clusterings <- tibble()
 
 # Iteramos sobre cada valor de k
-# Parámetro nstart = 15 para evitar sesgo de única inicialización aleatoria de centroides
+# Parámetro nstart = 25 para evitar sesgo de única inicialización aleatoria de centroides
 for (i in centers) {
   
   km <- pca_recipe_final %>%
@@ -334,9 +329,8 @@ for (i in centers) {
         select(k, everything()))
 }
 
-clusterings
-assignments
-
+km_clusterings
+km_assignments
 
 # Graficamos el método del codo
 # Razonable optar por k =  4 o k = 5 (no es nítido el punto donde se aplana la caída de variabilidad)
@@ -350,7 +344,6 @@ ggplot(clusterings, aes(x=as.factor(k), y=tot.withinss, group=1)) +
 
 # Por sugerencia de la IA Claude, calculamos la reducción porcentual de WCV con cada k
 # Confirmamos que a partir de k = 4 se aplana la curva (las reducciones empiezan a moderarse)
-# De todas formas hacemos pruebas con k = 5 (equivalente a la cantidad de componentes principales)
 clusterings <- clusterings %>%
   arrange(k) %>%
   mutate(reduccion_WCV = (lag(tot.withinss) - tot.withinss) / lag(tot.withinss) * 100,
@@ -360,11 +353,79 @@ clusterings
 ggplot(clusterings, aes(x=as.factor(k), y=tot.withinss, group=1)) +
   geom_line() +
   geom_point() +
-  geom_vline(xintercept = 4, linetype="dashed") +
+  geom_vline(xintercept = c(4), linetype="dashed", , color="red") +
   labs(title = "Método del codo: K-means",
        x="Cantidad clústers (k)",
        y="Variabilidad intra-cluster (WCV)") +
   theme_minimal()
+
+
+## Hierarchical Clustering----
+
+# Calculamos matriz de distancias. Por convención:
+# Distancia euclidiana (no hemos cerciorado outliers para usar manhattan)
+# Método ward.D2 de vinculación (para priorizar minimización de WCV)
+dist <- pca_data %>%
+  select(starts_with("PC")) %>%
+  dist(method = "euclidean")
+
+hc <- hclust(dist, method = "ward.D2")
+
+# Graficamos el dendograma
+# El corte más razonable sigue siendo de 4 clusters
+# Vemos que el siguiente salto natural el corte en k = 6 clusters (no 5 como vimos con K-means)
+dhc <- as.dendrogram(hc)
+hc_data <- dendro_data(dhc, type = "rectangle")
+
+ggplot(segment(hc_data)) + 
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) + 
+  coord_flip() + 
+  scale_y_reverse(expand = c(0.2, 0)) +
+  geom_hline(yintercept= c(52, 60), linetype="dashed", color="red") +
+  labs(title = "Matriz de disimilitud: clustering jerárquico ('ward.D2')",
+       x="Municipios",
+       y="Distancia") +
+  theme_minimal()
+
+
+## Interpretación----
+
+## Comparamos distribución de municipios por cluster (cortes (KM vs HC)
+
+# K-means: extraemos asignaciones
+# Asignaciones con k=4
+# Más de la mitad de los municipios se concentran en un mismo cluster, con el riesgo de ser muy heterogéneo
+km4 <- assignments %>%
+  filter(k == 4)
+km4 %>% count(.cluster) %>% 
+  mutate(pct = round(n / sum(n) * 100, 1))
+
+# Asignaciones con k=5
+# Dos clusters se mantienen similares y se distribuye el peso del anterior cluster 2
+# Mayor granularidad puede ser más apropiada para diferenciar municipios. Se puede corroborar visualmente
+km5 <- assignments %>%
+  filter(k == 5)
+km5 %>% count(.cluster) %>% 
+  mutate(pct = round(n / sum(n) * 100, 1))
+
+# Jerárquico: extraemos asignaciones
+# La distribución porcentual de municipios se asemeja a la observada con Kmeans
+# Asignaciones con k=4
+hc4 <- cutree(hc, k = 4)
+tibble(cluster = hc4) %>%
+  count(cluster) %>%
+  mutate(pct = round(n / sum(n) * 100, 1))
+
+# Asignaciones con k=6
+hc6 <- cutree(hc, k = 6)
+tibble(cluster = hc6) %>%
+  count(cluster) %>%
+  mutate(pct = round(n / sum(n) * 100, 1))
+
+# Con k=4 las distribuciones son similares. Hay un cluster dominante (53%), dos medianos y uno pequeños.
+# Pero en el jerárquico, el mediano tiene más preponderancia. 
+# Para mayor robustez, es necesario analizar comportamiento variables (KM con k=5 vs HC con k=6)
+
 
 
 
