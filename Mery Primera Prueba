@@ -104,13 +104,13 @@ atlas <- atlas %>%
 
 ## Exploramos y tratamos NAs (por variables y por municipio)----
 
-tabla_nas_vars <- atlas %>%
+nas_vars <- atlas %>%
   summarise(across(everything(), ~sum(is.na(.)))) %>%
   pivot_longer(everything(), names_to = "variable", values_to = "total_nas") %>%
   mutate(porcentaje = (total_nas / nrow(atlas)) * 100) %>%
   arrange(desc(total_nas))
 
-tabla_nas_munis <- atlas %>%
+nas_munis <- atlas %>%
   mutate(total_nas = rowSums(is.na(select(., starts_with("edu_"),
                                           starts_with("ml_"),
                                           starts_with("sb_"),
@@ -134,39 +134,36 @@ atlas <- atlas %>%
 
 colSums(is.na(atlas))
 
+rm(nas_munis, nas_vars)
+
 
 
 #-------------- PREPROCESAMIENTO --------------
 
 ## Dispersión de los datos----
 
-# Graficamos desvío estándar para mejor visualización de los datos (sin población y hogares)
-# Tabulamos distribución de los desvíos para observar dónde hacer los cortes de las categorías
-tabla_dispersion <- atlas %>%
-  summarise(across(where(is.numeric), ~sd(., na.rm = TRUE))) %>%
-  pivot_longer(everything(), names_to = "variable", values_to = "desviacion_estandar") %>%
-  arrange(desc(desviacion_estandar))
+# Calculamos desvíos estándar para entender heterogeneidad de municipios (sin población y hogares que tienen otra escala)
 
-distribucion_desvios <- atlas %>%
+desvios <- atlas %>%
   summarise(across(where(is.numeric), ~sd(., na.rm = TRUE))) %>%
-  pivot_longer(everything(), names_to = "variable", values_to = "desviacion") %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "sd") %>%
   filter(!variable %in% c("num_poblacion", "num_hogares"))
 
-summary(distribucion_desvios$desviacion)
+summary(desvios$sd)
 
-# Clasificación basada en los cuartiles de la base
-desvios_categorizados <- desvios_distribucion %>%
+# Clasificación de desvíos basada en cuartiles
+desvios <- desvios %>%
   mutate(categoria = case_when(
-    desviacion >= 0.1963 ~ "Alta",
-    desviacion <= 0.0649 ~ "Baja",
-    TRUE                 ~ "Media"), 
+    sd >= 0.1963 ~ "Alta",
+    sd <= 0.0649 ~ "Baja",
+    TRUE ~ "Media"), 
     categoria = factor(categoria, levels = c("Alta", "Media", "Baja"))) %>%
-  arrange(desc(desviacion))
+  arrange(desc(sd))
 
-print(desvios_categorizados)
+print(desvios)
 
 # Graficamos la clasificación de variables 
-ggplot(desvios_categorizados, aes(x = reorder(variable, desviacion), y = desviacion, fill = categoria)) +
+ggplot(desvios, aes(x = reorder(variable, sd), y = sd, fill = categoria)) +
   geom_col() +
   coord_flip() + # Para que los nombres de las variables se lean bien
   scale_fill_manual(values = c(
@@ -176,13 +173,13 @@ ggplot(desvios_categorizados, aes(x = reorder(variable, desviacion), y = desviac
   )) +
   labs(
     title = "Brechas territoriales en localidades argentinas",
-    subtitle = "Clasificación de indicadores según su desviación estándar (N=2217)", #2320?
-    x = "Indicador de bienestarl",
+    subtitle = "Clasificación de indicadores según su desviación estándar (N=2217)",
+    x = "Indicador de bienestar",
     y = "Desviación estándar",
     fill = "Nivel de heterogeneidad"
   ) +
   theme_minimal() +
-  theme(legend.position = "bottom") 
+  theme(legend.position = "bottom")
 
 
 ## Matriz de correlación----
@@ -193,10 +190,10 @@ corr <- atlas %>%
   select(-num_poblacion, -num_hogares)
 
 # Calculamos la matriz
-matriz_correlacion <- cor(corr)
+corr_matriz <- cor(corr)
 
 # Graficamos la matriz
-ggcorrplot(matriz_correlacion,
+ggcorrplot(corr_matriz,
            hc.order = TRUE,
            type = "lower",
            lab = TRUE,        
@@ -258,9 +255,9 @@ tidy(pca_estimates, 2, type="variance") %>%
 # - Trade off: sumar PC6 y PC7 permite superar el 80% de varianza acumulada, pero hay superposición interpretativa con PC3 y PC4
 
 tidy(pca_estimates, 2, type="coef") %>%
-  filter(component %in% paste0("PC", 1:5)) %>%
+  filter(component %in% paste0("PC", 1:7)) %>%
   mutate(component = factor(component, 
-                            levels = paste0("PC", 1:5)),
+                            levels = paste0("PC", 1:7)),
          direccion = ifelse(value>0, "Negativa", "Positiva")) %>% 
   ggplot(aes(value, terms, fill=direccion)) +
   geom_col(show.legend = FALSE) +
@@ -315,14 +312,14 @@ for (i in centers) {
     kmeans(x = ., centers = i, nstart = 25)
   
   # glance: extraemos métricas de variabilidad intra/extracluster
-  clusterings <- clusterings %>%
+  km_clusterings <- km_clusterings %>%
     bind_rows(
       glance(km) %>%
         mutate(k = i) %>%
         select(k, everything()))
   
   # augment: asignaciones de clusters
-  assignments <- assignments %>%
+  km_assignments <- km_assignments %>%
     bind_rows(
       augment(km, atlas) %>%
         mutate(k = i) %>%
@@ -334,7 +331,7 @@ km_assignments
 
 # Graficamos el método del codo
 # Razonable optar por k =  4 o k = 5 (no es nítido el punto donde se aplana la caída de variabilidad)
-ggplot(clusterings, aes(x=as.factor(k), y=tot.withinss, group=1)) +
+ggplot(km_clusterings, aes(x=as.factor(k), y=tot.withinss, group=1)) +
   geom_line() +
   geom_point() +
   labs(title = "Método del codo: K-means",
@@ -344,13 +341,13 @@ ggplot(clusterings, aes(x=as.factor(k), y=tot.withinss, group=1)) +
 
 # Por sugerencia de la IA Claude, calculamos la reducción porcentual de WCV con cada k
 # Confirmamos que a partir de k = 4 se aplana la curva (las reducciones empiezan a moderarse)
-clusterings <- clusterings %>%
+km_clusterings <- km_clusterings %>%
   arrange(k) %>%
   mutate(reduccion_WCV = (lag(tot.withinss) - tot.withinss) / lag(tot.withinss) * 100,
          aumento_BCV = (betweenss - lag(betweenss)) / totss * 100)
-clusterings
+km_clusterings
 
-ggplot(clusterings, aes(x=as.factor(k), y=tot.withinss, group=1)) +
+ggplot(km_clusterings, aes(x=as.factor(k), y=tot.withinss, group=1)) +
   geom_line() +
   geom_point() +
   geom_vline(xintercept = c(4), linetype="dashed", , color="red") +
@@ -363,7 +360,7 @@ ggplot(clusterings, aes(x=as.factor(k), y=tot.withinss, group=1)) +
 ## Hierarchical Clustering----
 
 # Calculamos matriz de distancias. Por convención:
-# Distancia euclidiana (no hemos cerciorado outliers para usar manhattan)
+# Distancia euclidiana (Manhtann más sensible a outliers que no controlamos)
 # Método ward.D2 de vinculación (para priorizar minimización de WCV)
 dist <- pca_data %>%
   select(starts_with("PC")) %>%
@@ -373,7 +370,7 @@ hc <- hclust(dist, method = "ward.D2")
 
 # Graficamos el dendograma
 # El corte más razonable sigue siendo de 4 clusters
-# Vemos que el siguiente salto natural el corte en k = 6 clusters (no 5 como vimos con K-means)
+# Vemos que el siguiente salto natural el corte en k = 6 o k = 8 clusters (no 5 como vimos con K-means)
 dhc <- as.dendrogram(hc)
 hc_data <- dendro_data(dhc, type = "rectangle")
 
@@ -381,7 +378,7 @@ ggplot(segment(hc_data)) +
   geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) + 
   coord_flip() + 
   scale_y_reverse(expand = c(0.2, 0)) +
-  geom_hline(yintercept= c(52, 60), linetype="dashed", color="red") +
+  geom_hline(yintercept= c(52, 60, 45), linetype="dashed", color="red") +
   labs(title = "Matriz de disimilitud: clustering jerárquico ('ward.D2')",
        x="Municipios",
        y="Distancia") +
@@ -390,41 +387,108 @@ ggplot(segment(hc_data)) +
 
 ## Interpretación----
 
-## Comparamos distribución de municipios por cluster (cortes (KM vs HC)
 
-# K-means: extraemos asignaciones
-# Asignaciones con k=4
-# Más de la mitad de los municipios se concentran en un mismo cluster, con el riesgo de ser muy heterogéneo
-km4 <- assignments %>%
-  filter(k == 4)
-km4 %>% count(.cluster) %>% 
-  mutate(pct = round(n / sum(n) * 100, 1))
+## Analizamos y comparamos clusters por método
 
-# Asignaciones con k=5
-# Dos clusters se mantienen similares y se distribuye el peso del anterior cluster 2
-# Mayor granularidad puede ser más apropiada para diferenciar municipios. Se puede corroborar visualmente
-km5 <- assignments %>%
-  filter(k == 5)
-km5 %>% count(.cluster) %>% 
-  mutate(pct = round(n / sum(n) * 100, 1))
+# Recuperamos base Atlas y asignamos clusters con k = 4
+atlas_clusters_4 <- km_assignments %>%
+  filter(k == 4) %>%
+  select(-k) %>%
+  rename(km_cluster = .cluster) %>% 
+  mutate(km_cluster = droplevels(km_cluster),
+         km_cluster = as.integer(km_cluster),
+         hc_cluster = as.integer(hc4))
 
-# Jerárquico: extraemos asignaciones
-# La distribución porcentual de municipios se asemeja a la observada con Kmeans
-# Asignaciones con k=4
-hc4 <- cutree(hc, k = 4)
-tibble(cluster = hc4) %>%
-  count(cluster) %>%
-  mutate(pct = round(n / sum(n) * 100, 1))
+# Graficamos comportamiento de variables
+atlas_clusters_4 %>%
+  select(km_cluster, edu_fin_secundaria:tic_celular) %>%
+  pivot_longer(cols = -c(km_cluster)) %>%
+  ggplot(aes(y = value, fill = km_cluster)) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  facet_wrap(~ name, scales = "free_y") +
+  labs(title = "Comportamiento de variables por cluster: K-means (k=4)",
+       fill = "Cluster")
 
-# Asignaciones con k=6
-hc6 <- cutree(hc, k = 6)
-tibble(cluster = hc6) %>%
-  count(cluster) %>%
-  mutate(pct = round(n / sum(n) * 100, 1))
+atlas_clusters_4 %>%
+  select(hc_cluster, edu_fin_secundaria:tic_celular) %>%
+  pivot_longer(cols = -c(hc_cluster)) %>%
+  ggplot(aes(y = value, fill = as.factor(hc_cluster))) +
+  geom_boxplot() +
+  facet_wrap(~ name, scales = "free_y") +
+  labs(title = "Comportamiento de variables por cluster: Jerárquico (k=4)",
+       fill = "Cluster") +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
 
-# Con k=4 las distribuciones son similares. Hay un cluster dominante (53%), dos medianos y uno pequeños.
-# Pero en el jerárquico, el mediano tiene más preponderancia. 
-# Para mayor robustez, es necesario analizar comportamiento variables (KM con k=5 vs HC con k=6)
+# Recodificamos clusters del método jerárquico con perfiles similares al kmeans
+atlas_clusters_4 <- atlas_clusters_4 %>%
+  mutate(hc_cluster_recod = case_when(hc_cluster == 1 ~ 2,
+                                      hc_cluster == 2 ~ 4,
+                                      hc_cluster == 3 ~ 1,
+                                      hc_cluster == 4 ~ 3))
 
+# Volvemos a graficar comportamiento de variables para el método jerárquico
+atlas_clusters_4 %>%
+  select(hc_cluster_recod, edu_fin_secundaria:tic_celular) %>%
+  pivot_longer(cols = -c(hc_cluster_recod)) %>%
+  ggplot(aes(y = value, fill = as.factor(hc_cluster_recod))) +
+  geom_boxplot() +
+  facet_wrap(~ name, scales = "free_y") +
+  labs(title = "Comportamiento de variables por cluster: Jerárquico (k=4)",
+       fill = "Cluster") +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
 
+# Comparamos distribución de municipios entre clusters para cada método
+# Distribuciones se asemejan: hay un cluster dominante, dos medianos (más preponderante en el jerárquico) y uno pequeño
 
+clusters_munis <- left_join(atlas_clusters_4 %>% 
+            count(km_cluster) %>%
+            mutate(peso_km = round(n / sum(n) * 100, 1)) %>%
+            rename(cluster = km_cluster, n_km = n),
+          atlas_clusters_4 %>%
+            count(hc_cluster_recod) %>%
+            mutate(peso_hc = round(n / sum(n) * 100, 1)) %>%
+            rename(cluster = hc_cluster_recod, n_hc = n),
+          by = "cluster")
+
+# Evaluamos grado de convergencia de clusters entre métodos
+# Cluster 1, 2 y 4 robustos con 90% o más de coincidencias en las asignaciones. Cluster 3 más problemático: no hay diferenciación tajante. 
+# Puede haber menor cohesión de los datos o municipios agrupados son casos de "frontera" que comparten características con cluster 4
+# Hay sentido metodológico en que la estructura del cluster 3 no sea tan cohesionada: 
+#-Aunque sean cercanos, KM fuerza asignación por cercanía (al centroide de alto desempleo del PCA2)
+#-Método de enlace Ward (HC) fuerza asignación por similitud de los datos para minimizar WCV. Con Average link podría aumentar convergencia
+#-Desempleo no diferencia lo suficiente al espacio multidimensional, municipios comparten déficits que lo asemejan al cluster 4.
+
+table(atlas_clusters_4$km_cluster, atlas_clusters_4$hc_cluster_recod)
+
+clusters_convergencia <- atlas_clusters_4 %>% 
+  count(km_cluster, hc_cluster_recod) %>% 
+  pivot_wider(names_from = hc_cluster_recod,
+              values_from = n,
+              values_fill = 0)
+
+# Hacemos análisis geográfico sobre cluster predominante por provincia
+
+clusters_prov_km <- atlas_clusters_4 %>%
+  count(id_gob_regional, km_cluster) %>%
+  group_by(id_gob_regional) %>%
+  mutate(pct = round(n / sum(n) * 100, 1)) %>%
+  arrange(id_gob_regional, km_cluster)
+
+clusters_prov_hc <- atlas_clusters_4 %>%
+  count(id_gob_regional, hc_cluster_recod) %>%
+  group_by(id_gob_regional) %>%
+  mutate(pct = round(n / sum(n) * 100, 1)) %>%
+  arrange(id_gob_regional, hc_cluster_recod)
+
+clusters_prov_km
+clusters_prov_hc
