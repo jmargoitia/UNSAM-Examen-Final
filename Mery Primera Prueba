@@ -428,8 +428,3 @@ tibble(cluster = hc6) %>%
 
 
 
-
-## Hierarchical Clustering----
-
-
-
