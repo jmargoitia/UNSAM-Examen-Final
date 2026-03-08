@@ -23,11 +23,18 @@ atlas %>%
   glimpse() %>% 
   summary()
 
+## Tratamos niveles de gobierno----
+
 # Confirmamos que los data points son únicos (jurisdicción y año)
-# Sumamos hogares y población: se verifica que hay superposición de niveles de gobierno por desfasaje con Censo
+# Se verifica que hay superposición de niveles de gobierno por desfasaje con Censo 2022
 n_distinct(atlas$codigo_unico, na.rm = TRUE)
 n_distinct(atlas$codigo_pais, na.rm = TRUE)
 n_distinct(atlas$poblacion_anio, na.rm = TRUE)
+
+atlas %>% 
+  select(poblacion, hogares) %>% 
+  summarise(pob_tot = sum(poblacion, na.rm = TRUE),
+            hogares_tot = sum(hogares, na.rm = TRUE))
 
 atlas %>% 
   select(nombre_nivel, nivel_gobierno, codigo_nivel) %>% 
@@ -35,24 +42,29 @@ atlas %>%
 
 # Descartamos jurisdicciones provinciales: nos quedamos con 2320 obs
 # Corroboramos el agregado de población y hogares se acerca al Censo 2022
-colnames(atlas)
+
 atlas <- atlas %>%
-  filter(codigo_nivel == 2) %>% 
-  select(1,5:6,9:11,13:31)
+  filter(codigo_nivel == 2)
 
 atlas %>% 
   select(poblacion, hogares) %>% 
   summarise(pob_tot = sum(poblacion, na.rm = TRUE),
             hogares_tot = sum(hogares, na.rm = TRUE))
 
-## Reestructuramos variables de interés----
-# Factorizamos variable dummy (ODS), invertimos variables negativas, categorizamos y ordenamos
+atlas %>% 
+  select(nombre_nivel, nivel_gobierno, codigo_nivel) %>% 
+  table()
+
+
+## Reestructuramos variables----
+# Factorizamos variable dummy (ODS), invertimos alfabetismo, categorizamos y ordenamos
 colnames(atlas)
 
 atlas <- atlas %>% 
   mutate(tiene_ods = factor(tiene_ods,
                             levels = c(0,1),
                             labels = c("No","Si")))
+table(atlas$tiene_ods)
 
 atlas <- atlas %>%
   mutate(alfabetismo = 1-analfabetismo) %>%
@@ -102,7 +114,10 @@ atlas <- atlas %>%
          starts_with("demo_"),
          starts_with("tic_"))
 
-## Exploramos y tratamos NAs (por variables y por municipio)----
+
+## Tratamos NAs (por variables y por municipio)----
+# Identificamos que al resolver NAs, todas las localidades tienen indicadores de ODS
+# Solo quedan 22 localidades con valores faltantes en la variable poblacion
 
 nas_vars <- atlas %>%
   summarise(across(everything(), ~sum(is.na(.)))) %>%
@@ -111,7 +126,9 @@ nas_vars <- atlas %>%
   arrange(desc(total_nas))
 
 nas_munis <- atlas %>%
-  mutate(total_nas = rowSums(is.na(select(., starts_with("edu_"),
+  mutate(total_nas = rowSums(is.na(select(., starts_with("cat_"),
+                                          starts_with("num_"),
+                                          starts_with("edu_"),
                                           starts_with("ml_"),
                                           starts_with("sb_"),
                                           starts_with("demo_"),
@@ -129,12 +146,46 @@ atlas <- atlas %>%
   filter(total_nas<16) %>% 
   select(-total_nas)
 
+nas_vars2 <- atlas %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "total_nas") %>%
+  mutate(porcentaje = (total_nas / nrow(atlas)) * 100) %>%
+  arrange(desc(total_nas))
+
+nas_munis2 <- atlas %>%
+  mutate(total_nas = rowSums(is.na(select(., starts_with("cat_"),
+                                          starts_with("num_"),
+                                          starts_with("edu_"),
+                                          starts_with("ml_"),
+                                          starts_with("sb_"),
+                                          starts_with("demo_"),
+                                          starts_with("tic_"))))) %>%
+  count(total_nas, name = "munis") %>%
+  mutate(porcentaje = (munis / nrow(atlas)) * 100) %>%
+  arrange(desc(total_nas))
+
 atlas <- atlas %>%
   mutate(across(9:25, ~ifelse(is.na(.), median(., na.rm = TRUE), .)))
 
 colSums(is.na(atlas))
 
-rm(nas_munis, nas_vars)
+table(atlas$cat_ods)
+
+rm(nas_munis, nas_vars, nas_munis2, nas_vars2)
+
+
+# Evaluamos relevancia de tratar 22 NAs en variable población
+# Vemos distribución de localidades por tamaño y su correlato con grado de urbanización
+
+atlas %>%
+  select(num_poblacion, demo_urbano) %>%
+  mutate(tipo = ifelse(demo_urbano == 0, "Rural", "Urbano")) %>%
+  group_by(tipo) %>%
+  summarise(n_munis = n(),
+            pct_munis = round(n() / nrow(atlas) * 100, 1),
+            poblacion_total = sum(num_poblacion, na.rm = TRUE),
+            pct_poblacion = round(sum(num_poblacion, na.rm = TRUE) / 
+                            sum(atlas$num_poblacion, na.rm = TRUE) * 100, 1))
 
 
 
@@ -152,6 +203,7 @@ desvios <- atlas %>%
 summary(desvios$sd)
 
 # Clasificación de desvíos basada en cuartiles
+
 desvios <- desvios %>%
   mutate(categoria = case_when(
     sd >= 0.1963 ~ "Alta",
@@ -163,6 +215,7 @@ desvios <- desvios %>%
 print(desvios)
 
 # Graficamos la clasificación de variables 
+
 ggplot(desvios, aes(x = reorder(variable, sd), y = sd, fill = categoria)) +
   geom_col() +
   coord_flip() + # Para que los nombres de las variables se lean bien
@@ -173,7 +226,7 @@ ggplot(desvios, aes(x = reorder(variable, sd), y = sd, fill = categoria)) +
   )) +
   labs(
     title = "Brechas territoriales en localidades argentinas",
-    subtitle = "Clasificación de indicadores según su desviación estándar (N=2217)",
+    subtitle = "Clasificación de indicadores según su desviación estándar (n = 2217)",
     x = "Indicador de bienestar",
     y = "Desviación estándar",
     fill = "Nivel de heterogeneidad"
@@ -184,13 +237,13 @@ ggplot(desvios, aes(x = reorder(variable, sd), y = sd, fill = categoria)) +
 
 ## Matriz de correlación----
 
-# Seleccionamos variables de bienestar
+# Calculamos la matriz
+
 corr <- atlas %>%
   select(where(is.numeric)) %>%
-  select(-num_poblacion, -num_hogares)
+  select(-num_hogares)
 
-# Calculamos la matriz
-corr_matriz <- cor(corr)
+corr_matriz <- cor(corr, use = "complete.obs")
 
 # Graficamos la matriz
 ggcorrplot(corr_matriz,
@@ -265,7 +318,7 @@ tidy(pca_estimates, 2, type="coef") %>%
   geom_vline(xintercept = 0, linetype = "dashed") +
   scale_fill_manual(values = c("Negativa" = "#51127c", "Positiva" = "#fb8861")) +
   xlim(-1.1, 1.1) +
-  labs(title="Cargas factoriales (comp. 1-5)",
+  labs(title="Cargas factoriales (comp. 1-7)",
        x="Carga",
        y="Variable") + 
   facet_wrap(~component, nrow=1) +
@@ -350,7 +403,7 @@ km_clusterings
 ggplot(km_clusterings, aes(x=as.factor(k), y=tot.withinss, group=1)) +
   geom_line() +
   geom_point() +
-  geom_vline(xintercept = c(4), linetype="dashed", , color="red") +
+  geom_vline(xintercept = c(4), linetype="dashed", , color="red", linewidth = 0.7) +
   labs(title = "Método del codo: K-means",
        x="Cantidad clústers (k)",
        y="Variabilidad intra-cluster (WCV)") +
@@ -378,7 +431,7 @@ ggplot(segment(hc_data)) +
   geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) + 
   coord_flip() + 
   scale_y_reverse(expand = c(0.2, 0)) +
-  geom_hline(yintercept= c(52, 60, 45), linetype="dashed", color="red") +
+  geom_hline(yintercept= c(60), linetype="dashed", color="red", linewidth = 0.7) +
   labs(title = "Matriz de disimilitud: clustering jerárquico ('ward.D2')",
        x="Municipios",
        y="Distancia") +
@@ -391,15 +444,17 @@ ggplot(segment(hc_data)) +
 ## Analizamos y comparamos clusters por método
 
 # Recuperamos base Atlas y asignamos clusters con k = 4
+
+hc4 <- cutree(hc, k = 4)
+
 atlas_clusters_4 <- km_assignments %>%
   filter(k == 4) %>%
   select(-k) %>%
   rename(km_cluster = .cluster) %>% 
   mutate(km_cluster = droplevels(km_cluster),
-         km_cluster = as.integer(km_cluster),
-         hc_cluster = as.integer(hc4))
-
-# Graficamos comportamiento de variables
+         hc_cluster = as.factor(hc4))
+ 
+# Graficamos comportamiento de variables (KM vs HC)
 atlas_clusters_4 %>%
   select(km_cluster, edu_fin_secundaria:tic_celular) %>%
   pivot_longer(cols = -c(km_cluster)) %>%
@@ -450,15 +505,22 @@ atlas_clusters_4 %>%
 # Comparamos distribución de municipios entre clusters para cada método
 # Distribuciones se asemejan: hay un cluster dominante, dos medianos (más preponderante en el jerárquico) y uno pequeño
 
-clusters_munis <- left_join(atlas_clusters_4 %>% 
-            count(km_cluster) %>%
-            mutate(peso_km = round(n / sum(n) * 100, 1)) %>%
-            rename(cluster = km_cluster, n_km = n),
-          atlas_clusters_4 %>%
-            count(hc_cluster_recod) %>%
-            mutate(peso_hc = round(n / sum(n) * 100, 1)) %>%
-            rename(cluster = hc_cluster_recod, n_hc = n),
-          by = "cluster")
+clusters_munis <- left_join(
+  atlas_clusters_4 %>% 
+    count(km_cluster) %>%
+    mutate(peso_km = round(n / sum(n) * 100, 1),
+           cluster = as.integer(km_cluster)) %>%
+    select(-km_cluster) %>%
+    rename(n_km = n),
+  atlas_clusters_4 %>%
+    count(hc_cluster_recod) %>%
+    mutate(peso_hc = round(n / sum(n) * 100, 1),
+           cluster = as.integer(hc_cluster_recod)) %>%
+    select(-hc_cluster_recod) %>%
+    rename(n_hc = n),
+  by = "cluster")
+
+clusters_munis
 
 # Evaluamos grado de convergencia de clusters entre métodos
 # Cluster 1, 2 y 4 robustos con 90% o más de coincidencias en las asignaciones. Cluster 3 más problemático: no hay diferenciación tajante. 
@@ -476,19 +538,4 @@ clusters_convergencia <- atlas_clusters_4 %>%
               values_from = n,
               values_fill = 0)
 
-# Hacemos análisis geográfico sobre cluster predominante por provincia
-
-clusters_prov_km <- atlas_clusters_4 %>%
-  count(id_gob_regional, km_cluster) %>%
-  group_by(id_gob_regional) %>%
-  mutate(pct = round(n / sum(n) * 100, 1)) %>%
-  arrange(id_gob_regional, km_cluster)
-
-clusters_prov_hc <- atlas_clusters_4 %>%
-  count(id_gob_regional, hc_cluster_recod) %>%
-  group_by(id_gob_regional) %>%
-  mutate(pct = round(n / sum(n) * 100, 1)) %>%
-  arrange(id_gob_regional, hc_cluster_recod)
-
-clusters_prov_km
-clusters_prov_hc
+clusters_convergencia
